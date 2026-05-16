@@ -81,20 +81,39 @@ def safe_int(val: Any, default: int, lo: int, hi: int) -> int:
     return max(lo, min(hi, n))
 
 def ffmpeg_path() -> Optional[str]:
-    """Gjen ffmpeg ne Windows/Linux/Railway."""
+    """Gjen ffmpeg ne Windows/Linux/Railway/Nixpacks.
+
+    Prioritet:
+    1) ffmpeg ne PATH
+    2) imageio-ffmpeg bundled binary
+    3) path-e te zakonshme Linux
+    4) Nix store
+    """
     found = shutil.which("ffmpeg")
     if found:
         return found
-    for p in ("/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/nix/store"):
-        if p == "/nix/store":
-            try:
-                for ff in Path(p).rglob("ffmpeg"):
-                    if ff.is_file():
-                        return str(ff)
-            except Exception:
-                pass
-        elif Path(p).exists():
+
+    try:
+        import imageio_ffmpeg
+        bundled = imageio_ffmpeg.get_ffmpeg_exe()
+        if bundled and Path(bundled).exists():
+            return bundled
+    except Exception:
+        pass
+
+    for p in ("/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg"):
+        if Path(p).exists():
             return p
+
+    try:
+        nix = Path("/nix/store")
+        if nix.exists():
+            for ff in nix.glob("*/bin/ffmpeg"):
+                if ff.is_file():
+                    return str(ff)
+    except Exception:
+        pass
+
     return None
 
 def ffmpeg_ok() -> bool:
@@ -295,7 +314,7 @@ def _build_opts(jid: str, payload: Dict, folder: Path) -> Dict[str, Any]:
     tmpl = str(folder / "%(title).140s.%(ext)s")
     opts: Dict[str, Any] = {
         "outtmpl": tmpl,
-        "ffmpeg_location": ffmpeg_path() or "/usr/bin/ffmpeg",
+        "ffmpeg_location": ffmpeg_path(),
         "quiet": True, "no_warnings": True,
         "ignoreerrors": True,
         "noplaylist": True,
@@ -334,9 +353,6 @@ def run_download(jid: str) -> None:
         if jid in CANCELLED:
             _job_update(jid, status="cancelled", progress=0, message="U anulua.")
             return
-        if not ffmpeg_ok():
-            raise RuntimeError("FFmpeg nuk u gjet.")
-
         _job_update(jid, status="starting", progress=2, message="Fillim...")
         opts = _build_opts(jid, payload, folder)
 
@@ -509,6 +525,15 @@ def _extract_playlist_entries(url: str, limit: int) -> List[Dict[str, Any]]:
 @app.route("/")
 def index() -> Response:
     return Response(UI, mimetype="text/html")
+
+
+@app.route("/api/debug-ffmpeg")
+def api_debug_ffmpeg():
+    return jsonify({
+        "ffmpeg_path": ffmpeg_path(),
+        "ffmpeg_ok": ffmpeg_ok(),
+        "PATH": os.environ.get("PATH", ""),
+    })
 
 @app.route("/api/health")
 def api_health():
@@ -1952,14 +1977,12 @@ updateBatchInfo();
 # ── ENTRY POINT ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    host = "0.0.0.0"
     print("=" * 60)
     print("  FIXOTOOLS - LITE Edition")
     print(f"  Paralel: {PARALLEL_JOBS}x  |  Max batch: {MAX_BATCH}")
-    print(f"  -> http://127.0.0.1:5000")
+    print(f"  FFmpeg: {ffmpeg_path() or 'NUK U GJET'}")
+    print(f"  -> http://{host}:{port}")
     print("=" * 60)
-    if not ffmpeg_ok():
-        print("  WARNING: FFmpeg jo i instaluar!")
-        print("  Windows: winget install ffmpeg")
-        print("  macOS:   brew install ffmpeg")
-        print("=" * 60)
-    app.run(debug=False, host="127.0.0.1", port=5000, threaded=True)
+    app.run(debug=False, host=host, port=port, threaded=True)
