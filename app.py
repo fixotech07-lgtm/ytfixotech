@@ -29,7 +29,7 @@ for d in (DATA_DIR, DOWNLOAD_DIR, JOBS_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 MAX_BATCH      = 250
-PARALLEL_JOBS  = 12       # rritur ne 12 paralel
+PARALLEL_JOBS  = 4        # Railway/free hosting: me stabile se 12 paralel
 SEARCH_RESULTS = 15
 ARTIST_LIMIT   = 50       # sa kenge te marrim per cdo artist
 
@@ -80,7 +80,25 @@ def safe_int(val: Any, default: int, lo: int, hi: int) -> int:
     except Exception: return default
     return max(lo, min(hi, n))
 
-def ffmpeg_ok() -> bool: return shutil.which("ffmpeg") is not None
+def ffmpeg_path() -> Optional[str]:
+    """Gjen ffmpeg ne Windows/Linux/Railway."""
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    for p in ("/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/nix/store"):
+        if p == "/nix/store":
+            try:
+                for ff in Path(p).rglob("ffmpeg"):
+                    if ff.is_file():
+                        return str(ff)
+            except Exception:
+                pass
+        elif Path(p).exists():
+            return p
+    return None
+
+def ffmpeg_ok() -> bool:
+    return ffmpeg_path() is not None
 
 def load_json(path: Path, default: Any) -> Any:
     try:
@@ -277,6 +295,7 @@ def _build_opts(jid: str, payload: Dict, folder: Path) -> Dict[str, Any]:
     tmpl = str(folder / "%(title).140s.%(ext)s")
     opts: Dict[str, Any] = {
         "outtmpl": tmpl,
+        "ffmpeg_location": ffmpeg_path() or "/usr/bin/ffmpeg",
         "quiet": True, "no_warnings": True,
         "ignoreerrors": True,
         "noplaylist": True,
@@ -1262,51 +1281,6 @@ body { padding: 24px 16px 60px; }
   .song-pick { grid-template-columns: 24px 60px 1fr; }
   .song-pick-dur { display: none; }
 }
-
-
-/* ── MINI PLAYER ─────────────────────────────────────────── */
-.mini-player {
-  position: fixed;
-  left: 16px; bottom: 16px;
-  width: 380px; max-width: calc(100vw - 32px);
-  background: var(--white);
-  border: 1px solid var(--paper-deep);
-  border-radius: 10px;
-  box-shadow: 0 10px 30px rgba(15,30,61,0.16);
-  z-index: 110;
-  overflow: hidden;
-  display: none;
-}
-.mini-player.show { display: block; }
-.mini-player-head {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 10px 12px;
-  background: var(--navy-abyss); color: var(--cream);
-}
-.mini-player-title {
-  font-size: 12px; font-weight: 700;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.mini-player-close {
-  width: 24px; height: 24px;
-  border: 1px solid rgba(255,255,255,0.25);
-  background: transparent; color: var(--cream);
-  border-radius: 5px; cursor: pointer;
-}
-.mini-player-close:hover { background: rgba(255,255,255,0.12); }
-.mini-frame {
-  width: 100%; aspect-ratio: 16 / 9;
-  background: var(--navy-deep);
-}
-.mini-frame iframe { width: 100%; height: 100%; border: 0; display: block; }
-.quick-row {
-  display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;
-}
-@media (max-width: 700px) {
-  .mini-player { left: 12px; bottom: 12px; width: calc(100vw - 24px); }
-  .dl-tracker { bottom: 300px; }
-}
-
 </style>
 </head>
 <body>
@@ -1369,11 +1343,6 @@ body { padding: 24px 16px 60px; }
           <option value="1080p">1080p</option>
         </select>
       </div>
-    </div>
-
-    <div class="quick-row">
-      <button class="btn btn-gold btn-mini" id="quickDownloadBtn" style="display:none">⚡ Shkarko rezultatin e pare</button>
-      <button class="btn btn-ghost btn-mini" id="quickPlayBtn" style="display:none">▶ Luaj rezultatin e pare</button>
     </div>
 
     <div class="results" id="results">
@@ -1461,17 +1430,6 @@ body { padding: 24px 16px 60px; }
 <!-- Download Tracker -->
 <div class="dl-tracker" id="dlTracker"></div>
 
-
-
-<!-- Mini Player -->
-<div class="mini-player" id="miniPlayer">
-  <div class="mini-player-head">
-    <div class="mini-player-title" id="miniPlayerTitle">Preview</div>
-    <button class="mini-player-close" onclick="closeMiniPlayer()">✕</button>
-  </div>
-  <div class="mini-frame" id="miniPlayerFrame"></div>
-</div>
-
 <!-- Artist Playlist Modal -->
 <div class="modal" id="artistModal">
   <div class="modal-content">
@@ -1503,7 +1461,6 @@ const esc = s => String(s||'').replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','
 const active = new Map();
 let lastResults = [];
 let artistSongs = [];
-let lastSearchText = '';
 
 async function api(path, method='GET', body=null) {
   const opts = { method, headers: { 'Content-Type':'application/json' } };
@@ -1536,8 +1493,6 @@ $('searchInput').addEventListener('input', e => {
   const q = e.target.value.trim();
   if (_searchTimer) clearTimeout(_searchTimer);
   if (!q) {
-    $('quickDownloadBtn').style.display = 'none';
-    $('quickPlayBtn').style.display = 'none';
     $('results').innerHTML = '<div class="empty"><div class="empty-big">🔍</div><p>Shkruaj emrin e nje kenge per te filluar</p><p style="margin-top:8px; font-size:11px">Te gjithe artistet kane butonin "Bej Playlist" anash 🎵</p></div>';
     $('searchSpin').classList.remove('show');
     return;
@@ -1545,15 +1500,6 @@ $('searchInput').addEventListener('input', e => {
   _searchTimer = setTimeout(() => doSearch(q), 350);
 });
 $('searchInput').addEventListener('keydown', e => {
-  if (e.key === 'Enter' && e.ctrlKey) {
-    if (lastResults[0]) downloadResult(0);
-    return;
-  }
-  if (e.key === ' ' && e.ctrlKey) {
-    e.preventDefault();
-    if (lastResults[0]) playResult(0);
-    return;
-  }
   if (e.key === 'Enter') {
     if (_searchTimer) clearTimeout(_searchTimer);
     const q = e.target.value.trim();
@@ -1562,7 +1508,6 @@ $('searchInput').addEventListener('keydown', e => {
 });
 
 async function doSearch(q) {
-  lastSearchText = q;
   $('searchSpin').classList.add('show');
   try {
     const r = await api('/api/search', 'POST', { q });
@@ -1590,8 +1535,6 @@ function formatViews(n) {
 
 function renderResults(results) {
   lastResults = results;
-  $('quickDownloadBtn').style.display = results.length ? '' : 'none';
-  $('quickPlayBtn').style.display = results.length ? '' : 'none';
   if (!results.length) {
     $('results').innerHTML = '<div class="empty"><div class="empty-big">😕</div><p>Asnje rezultat</p></div>';
     return;
@@ -1601,7 +1544,7 @@ function renderResults(results) {
     const uploader = r.uploader ?
       '<span class="uploader-link" onclick="openArtist(\'' + esc(r.uploader).replace(/'/g, "\\'") + '\')">' + esc(r.uploader) + '</span>' : '';
     return '<div class="result">' +
-      '<div class="result-thumb" onclick="playResult(' + i + ')" style="cursor:pointer" title="Luaj preview">' +
+      '<div class="result-thumb">' +
         (r.thumbnail ? '<img src="' + esc(r.thumbnail) + '" alt="" loading="lazy">' : '') +
         (r.duration ? '<div class="result-duration">' + esc(r.duration) + '</div>' : '') +
       '</div>' +
@@ -1613,43 +1556,12 @@ function renderResults(results) {
         '</div>' +
       '</div>' +
       '<div class="result-actions">' +
-        '<button class="btn btn-ghost btn-mini" onclick="playResult(' + i + ')">▶ Luaj</button>' +
         '<button class="btn btn-primary btn-mini" onclick="downloadResult(' + i + ')">⬇ Shkarko</button>' +
         (r.uploader ? '<button class="btn btn-gold btn-mini" onclick="openArtist(\'' + esc(r.uploader).replace(/'/g, "\\'") + '\')" title="Bej playlist nga ' + esc(r.uploader) + '">🎵 Playlist</button>' : '') +
       '</div>' +
     '</div>';
   }).join('');
 }
-
-function youtubeIdFromUrl(url) {
-  try {
-    const u = new URL(url);
-    if (u.hostname.includes('youtu.be')) return u.pathname.slice(1).split('/')[0];
-    if (u.searchParams.get('v')) return u.searchParams.get('v');
-    const parts = u.pathname.split('/').filter(Boolean);
-    const idx = parts.findIndex(p => ['shorts','embed','watch'].includes(p));
-    if (idx >= 0 && parts[idx+1]) return parts[idx+1];
-  } catch (e) {}
-  return '';
-}
-
-window.playResult = function(idx) {
-  const r = lastResults[idx];
-  if (!r) return;
-  const vid = r.id || youtubeIdFromUrl(r.url);
-  if (!vid) { alert('Nuk u gjet video ID per preview.'); return; }
-  $('miniPlayerTitle').textContent = r.title || 'Preview';
-  $('miniPlayerFrame').innerHTML = '<iframe src="https://www.youtube.com/embed/' + encodeURIComponent(vid) + '?autoplay=1&rel=0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>';
-  $('miniPlayer').classList.add('show');
-};
-
-window.closeMiniPlayer = function() {
-  $('miniPlayer').classList.remove('show');
-  $('miniPlayerFrame').innerHTML = '';
-};
-
-$('quickDownloadBtn').addEventListener('click', () => { if (lastResults[0]) downloadResult(0); });
-$('quickPlayBtn').addEventListener('click', () => { if (lastResults[0]) playResult(0); });
 
 window.downloadResult = function(idx) {
   const r = lastResults[idx];
