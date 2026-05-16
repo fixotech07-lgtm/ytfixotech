@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="sq">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube Audio Downloader</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎵 YouTube Audio Downloader</h1>
+            <p class="subtitle">Shkarko audio nga YouTube në MP3</p>
+        </header>
+
+        <main>
+            <div class="input-group">
+                <input 
+                    type="text" 
+                    id="url-input" 
+                    placeholder="Ngjit URL-në e YouTube këtu..." 
+                    autocomplete="off"
+                >
+                <button id="info-btn" onclick="getInfo()">Kërko</button>
+            </div>
+
+            <div id="video-info" class="video-info hidden">
+                <img id="thumbnail" src="" alt="Thumbnail">
+                <div class="info-text">
+                    <h3 id="video-title"></h3>
+                    <p id="video-uploader"></p>
+                    <p id="video-duration"></p>
+                </div>
+            </div>
+
+            <div id="quality-section" class="quality-section hidden">
+                <label for="quality-select">Cilësia e audios:</label>
+                <select id="quality-select">
+                    <option value="128">128 kbps (më e vogël)</option>
+                    <option value="192" selected>192 kbps (rekomandohet)</option>
+                    <option value="256">256 kbps (cilësi e mirë)</option>
+                    <option value="320">320 kbps (më e mira)</option>
+                </select>
+                <button id="download-btn" onclick="downloadAudio()">⬇ Shkarko MP3</button>
+            </div>
+
+            <div id="status" class="status hidden"></div>
+
+            <div id="loader" class="loader hidden">
+                <div class="spinner"></div>
+                <p id="loader-text">Duke punuar...</p>
+            </div>
+        </main>
+
+        <footer>
+            <p>⚠️ Përdore vetëm për përmbajtje që ke të drejtë ta shkarkosh.</p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
