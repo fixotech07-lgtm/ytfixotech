@@ -1,12 +1,6 @@
 """
 FIXOTOOLS — Media Downloader · LITE Edition
 Super fast · Direct download · Artist playlist builder
-
-Install: pip install flask yt-dlp
-         winget install ffmpeg  (Windows)
-         brew install ffmpeg    (macOS)
-Run:     python app.py
-Open:    http://127.0.0.1:5000
 """
 from __future__ import annotations
 
@@ -29,9 +23,9 @@ for d in (DATA_DIR, DOWNLOAD_DIR, JOBS_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 MAX_BATCH      = 250
-PARALLEL_JOBS  = 4        # Railway/free hosting: me stabile se 12 paralel
+PARALLEL_JOBS  = 12
 SEARCH_RESULTS = 15
-ARTIST_LIMIT   = 50       # sa kenge te marrim per cdo artist
+ARTIST_LIMIT   = 50
 
 app          = Flask(__name__)
 _LOCK        = threading.RLock()
@@ -42,10 +36,8 @@ CANCELLED:    set[str] = set()
 GROUPS: Dict[str, Dict[str, Any]] = {}
 SEARCH_CACHE: Dict[str, tuple[float, List[Dict]]] = {}
 ARTIST_CACHE: Dict[str, tuple[float, List[Dict]]] = {}
-CACHE_TTL = 600  # 10 min
+CACHE_TTL = 600
 
-
-# ── UTILS ────────────────────────────────────────────────────────────────────
 
 def now_ms() -> int: return int(time.time() * 1000)
 def ts() -> str: return time.strftime("%Y-%m-%d %H:%M:%S")
@@ -80,44 +72,7 @@ def safe_int(val: Any, default: int, lo: int, hi: int) -> int:
     except Exception: return default
     return max(lo, min(hi, n))
 
-def ffmpeg_path() -> Optional[str]:
-    """Gjen ffmpeg ne Windows/Linux/Railway/Nixpacks.
-
-    Prioritet:
-    1) ffmpeg ne PATH
-    2) imageio-ffmpeg bundled binary
-    3) path-e te zakonshme Linux
-    4) Nix store
-    """
-    found = shutil.which("ffmpeg")
-    if found:
-        return found
-
-    try:
-        import imageio_ffmpeg
-        bundled = imageio_ffmpeg.get_ffmpeg_exe()
-        if bundled and Path(bundled).exists():
-            return bundled
-    except Exception:
-        pass
-
-    for p in ("/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg"):
-        if Path(p).exists():
-            return p
-
-    try:
-        nix = Path("/nix/store")
-        if nix.exists():
-            for ff in nix.glob("*/bin/ffmpeg"):
-                if ff.is_file():
-                    return str(ff)
-    except Exception:
-        pass
-
-    return None
-
-def ffmpeg_ok() -> bool:
-    return ffmpeg_path() is not None
+def ffmpeg_ok() -> bool: return shutil.which("ffmpeg") is not None
 
 def load_json(path: Path, default: Any) -> Any:
     try:
@@ -128,8 +83,6 @@ def load_json(path: Path, default: Any) -> Any:
 def save_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
 
-
-# ── HISTORY ──────────────────────────────────────────────────────────────────
 
 def _read_history() -> List[Dict[str, Any]]:
     d = load_json(HISTORY_FILE, [])
@@ -145,21 +98,16 @@ def delete_history_item(hid: str) -> bool:
     save_json(HISTORY_FILE, new); return True
 
 
-# ── YT SEARCH (super fast) ───────────────────────────────────────────────────
-
 def yt_search(query: str, n: int = SEARCH_RESULTS) -> List[Dict[str, Any]]:
     key = f"{query.lower()}::{n}"
     cached = SEARCH_CACHE.get(key)
     if cached and (time.time() - cached[0] < CACHE_TTL):
         return cached[1]
-
     opts = {
         "quiet": True, "no_warnings": True,
-        "extract_flat": True,
-        "skip_download": True,
+        "extract_flat": True, "skip_download": True,
         "default_search": f"ytsearch{n}",
-        "ignoreerrors": True,
-        "no_color": True,
+        "ignoreerrors": True, "no_color": True,
     }
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -175,16 +123,14 @@ def yt_search(query: str, n: int = SEARCH_RESULTS) -> List[Dict[str, Any]]:
             if not url: continue
             thumb = e.get("thumbnail") or (f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg" if vid else "")
             results.append({
-                "id":        vid,
-                "url":       url,
-                "title":     e.get("title", "Untitled"),
-                "uploader":  e.get("uploader") or e.get("channel") or "",
-                "duration":  human_duration(e.get("duration") or 0),
+                "id": vid, "url": url,
+                "title": e.get("title", "Untitled"),
+                "uploader": e.get("uploader") or e.get("channel") or "",
+                "duration": human_duration(e.get("duration") or 0),
                 "thumbnail": thumb,
-                "views":     e.get("view_count") or 0,
+                "views": e.get("view_count") or 0,
             })
         SEARCH_CACHE[key] = (time.time(), results)
-        # Pastro cache
         if len(SEARCH_CACHE) > 80:
             cutoff = time.time() - CACHE_TTL
             for k in [k for k, v in SEARCH_CACHE.items() if v[0] < cutoff]:
@@ -196,21 +142,16 @@ def yt_search(query: str, n: int = SEARCH_RESULTS) -> List[Dict[str, Any]]:
 
 
 def yt_artist_songs(artist: str, limit: int = ARTIST_LIMIT) -> List[Dict[str, Any]]:
-    """Mbledh te gjitha kenget e nje artisti per playlist."""
     key = artist.lower()
     cached = ARTIST_CACHE.get(key)
     if cached and (time.time() - cached[0] < CACHE_TTL):
         return cached[1]
-
-    # Kerko me query qe forcon kenge te artistit
     query = f"{artist} songs"
     opts = {
         "quiet": True, "no_warnings": True,
-        "extract_flat": True,
-        "skip_download": True,
+        "extract_flat": True, "skip_download": True,
         "default_search": f"ytsearch{limit}",
-        "ignoreerrors": True,
-        "no_color": True,
+        "ignoreerrors": True, "no_color": True,
     }
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -223,18 +164,14 @@ def yt_artist_songs(artist: str, limit: int = ARTIST_LIMIT) -> List[Dict[str, An
             vid = e.get("id") or ""
             url = e.get("url") or (f"https://www.youtube.com/watch?v={vid}" if vid else "")
             if not url: continue
-
             title = e.get("title", "")
             uploader = (e.get("uploader") or e.get("channel") or "").lower()
-            # Filtro vetem kenget qe permbajne emrin e artistit ne titull ose uploader
             if (artist_lower in title.lower() or artist_lower in uploader):
                 thumb = e.get("thumbnail") or (f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg" if vid else "")
                 results.append({
-                    "id":        vid,
-                    "url":       url,
-                    "title":     title,
-                    "uploader":  e.get("uploader") or e.get("channel") or "",
-                    "duration":  human_duration(e.get("duration") or 0),
+                    "id": vid, "url": url, "title": title,
+                    "uploader": e.get("uploader") or e.get("channel") or "",
+                    "duration": human_duration(e.get("duration") or 0),
                     "thumbnail": thumb,
                 })
         ARTIST_CACHE[key] = (time.time(), results)
@@ -243,8 +180,6 @@ def yt_artist_songs(artist: str, limit: int = ARTIST_LIMIT) -> List[Dict[str, An
         print(f"Artist search error: {exc}")
         return []
 
-
-# ── JOBS ─────────────────────────────────────────────────────────────────────
 
 def _job_update(jid: str, **kw) -> None:
     with _LOCK:
@@ -263,29 +198,20 @@ def make_job(payload: Dict[str, Any], title: str = "", group_id: str = "",
     jpath = JOBS_DIR / jid
     jpath.mkdir(parents=True, exist_ok=True)
     job = {
-        "id":           jid,
-        "title":        title or "Download",
-        "thumbnail":    thumbnail,
-        "status":       "queued",
-        "progress":     0,
-        "message":      "Ne radhe...",
-        "created_at":   now_ms(),
-        "updated_at":   now_ms(),
-        "payload":      payload,
-        "path":         str(jpath),
-        "group_id":     group_id,
-        "filename":     None,
-        "download_url": None,
-        "size_human":   None,
-        "speed_human":  None,
+        "id": jid, "title": title or "Download",
+        "thumbnail": thumbnail, "status": "queued",
+        "progress": 0, "message": "Ne radhe...",
+        "created_at": now_ms(), "updated_at": now_ms(),
+        "payload": payload, "path": str(jpath),
+        "group_id": group_id, "filename": None,
+        "download_url": None, "size_human": None,
+        "speed_human": None,
     }
     with _LOCK:
         JOBS[jid] = job
         QUEUE.append(jid)
     return job
 
-
-# ── DOWNLOAD ENGINE — minimal overhead ──────────────────────────────────────
 
 def _progress_hook(jid: str):
     last = {"t": 0.0}
@@ -313,13 +239,9 @@ def _build_opts(jid: str, payload: Dict, folder: Path) -> Dict[str, Any]:
     mode = payload["mode"]
     tmpl = str(folder / "%(title).140s.%(ext)s")
     opts: Dict[str, Any] = {
-        "outtmpl": tmpl,
-        "ffmpeg_location": ffmpeg_path(),
-        "quiet": True, "no_warnings": True,
-        "ignoreerrors": True,
-        "noplaylist": True,
-        "windowsfilenames": True,
-        "continuedl": True,
+        "outtmpl": tmpl, "quiet": True, "no_warnings": True,
+        "ignoreerrors": True, "noplaylist": True,
+        "windowsfilenames": True, "continuedl": True,
         "retries": 2, "fragment_retries": 2,
         "concurrent_fragment_downloads": 16,
         "http_chunk_size": 10485760,
@@ -348,21 +270,19 @@ def run_download(jid: str) -> None:
     if not job: return
     payload = job["payload"]
     folder  = Path(job["path"])
-
     try:
         if jid in CANCELLED:
             _job_update(jid, status="cancelled", progress=0, message="U anulua.")
             return
+        if not ffmpeg_ok():
+            raise RuntimeError("FFmpeg nuk u gjet.")
         _job_update(jid, status="starting", progress=2, message="Fillim...")
         opts = _build_opts(jid, payload, folder)
-
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(payload["url"], download=True)
-
         if jid in CANCELLED:
             _job_update(jid, status="cancelled", progress=0, message="U anulua.")
             return
-
         title = sanitize(info.get("title", "download")) if isinstance(info, dict) else "download"
         ext_filter = payload.get("audio_format", "mp3") if payload["mode"] == "audio" else "mp4"
         files = sorted(p for p in folder.rglob(f"*.{ext_filter}") if p.is_file())
@@ -371,32 +291,22 @@ def run_download(jid: str) -> None:
                           if p.is_file() and p.suffix.lower() not in {".part", ".ytdl", ".jpg", ".webp"})
         if not files:
             raise RuntimeError("File nuk u gjet.")
-
         final = files[0]
         fsize = final.stat().st_size
-
         _job_update(
-            jid, status="done", progress=100,
-            message="Gati!",
-            filename=final.name,
-            download_url=f"/download/{jid}",
-            size_human=human_bytes(fsize),
-            title=title,
+            jid, status="done", progress=100, message="Gati!",
+            filename=final.name, download_url=f"/download/{jid}",
+            size_human=human_bytes(fsize), title=title,
         )
         add_history({
-            "id":         jid, "time": ts(),
-            "title":      title,
-            "thumbnail":  job.get("thumbnail", ""),
-            "mode":       payload["mode"],
-            "format":     ext_filter,
-            "filename":   final.name,
-            "size":       fsize,
+            "id": jid, "time": ts(), "title": title,
+            "thumbnail": job.get("thumbnail", ""),
+            "mode": payload["mode"], "format": ext_filter,
+            "filename": final.name, "size": fsize,
             "size_human": human_bytes(fsize),
         })
-
         gid = job.get("group_id")
         if gid: _check_group_complete(gid)
-
     except Exception as exc:
         if jid in CANCELLED:
             _job_update(jid, status="cancelled", progress=0, message="U anulua.")
@@ -428,11 +338,9 @@ def _zip_group(gid: str) -> None:
             if not group: return
             jids = list(group.get("job_ids", []))
             group_title = group.get("title", "playlist")
-
         zip_folder = JOBS_DIR / f"group_{gid}"
         zip_folder.mkdir(parents=True, exist_ok=True)
         zip_path = zip_folder / f"{sanitize(group_title)}.zip"
-
         added = 0; total_size = 0
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED) as zf:
             for jid in jids:
@@ -445,7 +353,6 @@ def _zip_group(gid: str) -> None:
                     zf.write(fpath, arcname=fname)
                     added += 1
                     total_size += fpath.stat().st_size
-
         if added > 0:
             with _LOCK:
                 group["zip_path"] = str(zip_path)
@@ -484,10 +391,10 @@ def _start_worker() -> None:
 
 def normalize_payload(data: Dict[str, Any]) -> Dict[str, Any]:
     return {
-        "url":           (data.get("url") or "").strip(),
-        "mode":          safe_str(data.get("mode"),         {"audio","video"}, "audio"),
-        "audio_format":  safe_str(data.get("audio_format"), {"mp3","m4a","opus"}, "mp3"),
-        "quality":       safe_str(data.get("quality"),      {"128","192","320"}, "192"),
+        "url": (data.get("url") or "").strip(),
+        "mode": safe_str(data.get("mode"), {"audio","video"}, "audio"),
+        "audio_format": safe_str(data.get("audio_format"), {"mp3","m4a","opus"}, "mp3"),
+        "quality": safe_str(data.get("quality"), {"128","192","320"}, "192"),
         "video_quality": safe_str(data.get("video_quality"),{"360p","720p","1080p","best"}, "720p"),
     }
 
@@ -495,10 +402,8 @@ def normalize_payload(data: Dict[str, Any]) -> Dict[str, Any]:
 def _extract_playlist_entries(url: str, limit: int) -> List[Dict[str, Any]]:
     opts = {
         "quiet": True, "no_warnings": True,
-        "extract_flat": "in_playlist",
-        "skip_download": True,
-        "playlistend": limit,
-        "ignoreerrors": True,
+        "extract_flat": "in_playlist", "skip_download": True,
+        "playlistend": limit, "ignoreerrors": True,
     }
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
@@ -513,32 +418,20 @@ def _extract_playlist_entries(url: str, limit: int) -> List[Dict[str, Any]]:
         if u:
             vid = e.get("id", "")
             result.append({
-                "url": u,
-                "title": e.get("title", "Track"),
+                "url": u, "title": e.get("title", "Track"),
                 "thumbnail": f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg" if vid else "",
             })
     return result[:limit]
 
 
-# ── ROUTES ───────────────────────────────────────────────────────────────────
-
 @app.route("/")
 def index() -> Response:
     return Response(UI, mimetype="text/html")
 
-
-@app.route("/api/debug-ffmpeg")
-def api_debug_ffmpeg():
-    return jsonify({
-        "ffmpeg_path": ffmpeg_path(),
-        "ffmpeg_ok": ffmpeg_ok(),
-        "PATH": os.environ.get("PATH", ""),
-    })
-
 @app.route("/api/health")
 def api_health():
     return jsonify({
-        "ffmpeg":      ffmpeg_ok(),
+        "ffmpeg": ffmpeg_ok(),
         "jobs_active": sum(1 for j in JOBS.values() if j["status"] in ("queued","downloading","starting")),
     })
 
@@ -553,7 +446,6 @@ def api_search():
 
 @app.route("/api/artist", methods=["POST"])
 def api_artist():
-    """Mbledh kenget e nje artisti per playlist."""
     data = request.get_json(silent=True) or {}
     artist = (data.get("artist") or "").strip()
     if not artist: return jsonify({"songs": []})
@@ -563,7 +455,7 @@ def api_artist():
 
 @app.route("/api/start", methods=["POST"])
 def api_start():
-    data    = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True) or {}
     payload = normalize_payload(data)
     if not is_url(payload["url"]):
         return jsonify({"error": "URL e pavlefshme."}), 400
@@ -575,8 +467,7 @@ def api_start():
 
 @app.route("/api/start-playlist", methods=["POST"])
 def api_start_playlist():
-    """Nis nje playlist YouTube te jashtem."""
-    data    = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True) or {}
     payload = normalize_payload(data)
     if not is_url(payload["url"]):
         return jsonify({"error": "URL e pavlefshme."}), 400
@@ -586,7 +477,6 @@ def api_start_playlist():
             return jsonify({"error": "Playlist bosh."}), 400
     except Exception as exc:
         return jsonify({"error": f"Gabim: {exc}"}), 500
-
     gid = uuid.uuid4().hex
     job_ids = []
     for entry in entries:
@@ -594,7 +484,6 @@ def api_start_playlist():
         j = make_job(ep, title=entry["title"], group_id=gid,
                     thumbnail=entry.get("thumbnail", ""))
         job_ids.append(j["id"])
-
     with _LOCK:
         GROUPS[gid] = {
             "id": gid, "title": f"Playlist ({len(entries)})",
@@ -606,13 +495,11 @@ def api_start_playlist():
 
 @app.route("/api/start-bulk", methods=["POST"])
 def api_start_bulk():
-    """Nis nje lista kengesh te zgjedhura (psh nga artist songs)."""
-    data    = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True) or {}
     songs = data.get("songs") or []
     if not songs: return jsonify({"error": "Asnje keng."}), 400
     title = (data.get("title") or "playlist").strip()
     payload_base = normalize_payload(data)
-
     gid = uuid.uuid4().hex
     job_ids = []
     for s in songs[:250]:
@@ -622,7 +509,6 @@ def api_start_bulk():
         j = make_job(p, title=s.get("title", "Track"),
                     group_id=gid, thumbnail=s.get("thumbnail", ""))
         job_ids.append(j["id"])
-
     with _LOCK:
         GROUPS[gid] = {
             "id": gid, "title": sanitize(title),
@@ -644,8 +530,7 @@ def api_group(gid: str):
             job = JOBS.get(j)
             if job:
                 jobs_info.append({
-                    "id": j,
-                    "title": job.get("title", ""),
+                    "id": j, "title": job.get("title", ""),
                     "thumbnail": job.get("thumbnail", ""),
                     "status": job.get("status"),
                     "progress": job.get("progress", 0),
@@ -658,7 +543,6 @@ def api_group(gid: str):
         active = sum(1 for s in statuses if s in {"downloading", "starting", "queued"})
         progress_total = sum(JOBS.get(j, {}).get("progress", 0) for j in jids)
         progress_avg = int(progress_total / len(jids)) if jids else 0
-
         result = {
             "id": gid, "title": group.get("title"), "count": group.get("count"),
             "done": done, "error": error, "active": active,
@@ -728,10 +612,6 @@ def api_history_clear():
     return jsonify({"ok": True})
 
 
-# ════════════════════════════════════════════════════════════════════════════
-#  UI — LITE Edition (dizajn i lehte, shkarkim direkt)
-# ════════════════════════════════════════════════════════════════════════════
-
 UI = r"""<!DOCTYPE html>
 <html lang="sq">
 <head>
@@ -746,7 +626,6 @@ UI = r"""<!DOCTYPE html>
   --navy-abyss: #050d1f;
   --navy-deep:  #0a1a3a;
   --navy:       #0f2557;
-  --navy-mid:   #1a3478;
   --navy-soft:  #5a73ab;
   --gold:       #d4b572;
   --gold-bright:#e8c987;
@@ -761,17 +640,13 @@ UI = r"""<!DOCTYPE html>
 }
 * { margin:0; padding:0; box-sizing:border-box; }
 html, body {
-  background: var(--cream);
-  color: var(--navy-deep);
-  font-family: var(--font);
-  font-size: 14px;
+  background: var(--cream); color: var(--navy-deep);
+  font-family: var(--font); font-size: 14px;
   min-height: 100vh;
 }
 body { padding: 24px 16px 60px; }
-
 .wrap { max-width: 1080px; margin: 0 auto; }
 
-/* ── HEADER (i thjeshte, jo i renduar) ─────────────────────── */
 .header {
   display: flex; justify-content: space-between; align-items: center;
   padding-bottom: 18px; margin-bottom: 24px;
@@ -784,71 +659,41 @@ body { padding: 24px 16px 60px; }
   border-radius: 8px;
   display: flex; align-items: center; justify-content: center;
   font-weight: 800; font-size: 16px;
-  letter-spacing: -0.02em;
 }
-.brand h1 {
-  font-size: 18px; font-weight: 800;
-  letter-spacing: -0.01em;
-  color: var(--navy-abyss);
-}
-.brand .sub {
-  font-size: 11px; color: var(--navy-soft);
-  font-weight: 500;
-}
+.brand h1 { font-size: 18px; font-weight: 800; color: var(--navy-abyss); }
+.brand .sub { font-size: 11px; color: var(--navy-soft); font-weight: 500; }
 .stat-mini {
-  font-size: 12px; color: var(--navy-soft);
-  font-weight: 600;
-  padding: 6px 12px;
-  background: var(--white);
-  border: 1px solid var(--paper-deep);
-  border-radius: 6px;
+  font-size: 12px; color: var(--navy-soft); font-weight: 600;
+  padding: 6px 12px; background: var(--white);
+  border: 1px solid var(--paper-deep); border-radius: 6px;
 }
 .stat-mini strong { color: var(--navy-abyss); }
 
-/* ── TABS ──────────────────────────────────────────────────── */
 .tabs {
   display: flex; gap: 4px; padding: 4px;
-  background: var(--white);
-  border: 1px solid var(--paper-deep);
-  border-radius: 8px;
-  margin-bottom: 20px;
+  background: var(--white); border: 1px solid var(--paper-deep);
+  border-radius: 8px; margin-bottom: 20px;
 }
 .tab {
   flex: 1; padding: 10px 16px;
   font-family: inherit; font-size: 13px; font-weight: 600;
-  color: var(--navy-soft);
-  background: transparent;
+  color: var(--navy-soft); background: transparent;
   border: none; border-radius: 5px; cursor: pointer;
   transition: all 0.15s ease;
 }
 .tab:hover { color: var(--navy); background: var(--ivory); }
 .tab.active { background: var(--navy-abyss); color: var(--cream); }
 
-/* ── PANEL ─────────────────────────────────────────────────── */
 .panel {
   background: var(--white);
   border: 1px solid var(--paper-deep);
-  border-radius: 10px;
-  padding: 24px;
+  border-radius: 10px; padding: 24px;
 }
 .panel.hidden { display: none; }
+.panel-title { font-size: 20px; font-weight: 700; color: var(--navy-abyss); margin-bottom: 4px; }
+.panel-sub { font-size: 13px; color: var(--navy-soft); margin-bottom: 20px; }
 
-.panel-title {
-  font-size: 20px; font-weight: 700;
-  color: var(--navy-abyss);
-  margin-bottom: 4px;
-  letter-spacing: -0.01em;
-}
-.panel-sub {
-  font-size: 13px; color: var(--navy-soft);
-  margin-bottom: 20px;
-}
-
-/* ── SEARCH BAR ────────────────────────────────────────────── */
-.search-box {
-  position: relative;
-  margin-bottom: 16px;
-}
+.search-box { position: relative; margin-bottom: 16px; }
 .search-input {
   width: 100%; padding: 14px 50px 14px 44px;
   background: var(--cream);
@@ -856,23 +701,15 @@ body { padding: 24px 16px 60px; }
   border-radius: 8px;
   font-family: inherit; font-size: 15px; font-weight: 500;
   color: var(--navy-abyss);
-  transition: border-color 0.15s ease;
 }
-.search-input:focus {
-  outline: none;
-  border-color: var(--navy);
-  background: var(--white);
-}
-.search-input::placeholder { color: var(--navy-soft); }
+.search-input:focus { outline: none; border-color: var(--navy); background: var(--white); }
 .search-icon {
   position: absolute; left: 14px; top: 50%;
-  transform: translateY(-50%);
-  color: var(--navy-soft);
+  transform: translateY(-50%); color: var(--navy-soft);
 }
 .search-spin {
   position: absolute; right: 14px; top: 50%;
-  transform: translateY(-50%);
-  display: none;
+  transform: translateY(-50%); display: none;
   width: 18px; height: 18px;
   border: 2px solid var(--paper);
   border-top-color: var(--navy);
@@ -882,57 +719,38 @@ body { padding: 24px 16px 60px; }
 .search-spin.show { display: block; }
 @keyframes spin { to { transform: translateY(-50%) rotate(360deg); } }
 
-/* ── OPTIONS ───────────────────────────────────────────────── */
-.opts {
-  display: flex; gap: 8px; flex-wrap: wrap;
-  margin-bottom: 16px;
-}
+.opts { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
 .opt {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 6px 10px;
   background: var(--cream);
   border: 1px solid var(--paper-deep);
-  border-radius: 6px;
-  font-size: 12px;
+  border-radius: 6px; font-size: 12px;
 }
 .opt label { color: var(--navy-soft); font-weight: 500; }
 .opt select {
-  padding: 2px 4px;
-  background: transparent;
-  border: none;
-  font-family: inherit;
-  font-size: 12px; font-weight: 600;
-  color: var(--navy-abyss);
-  cursor: pointer;
+  padding: 2px 4px; background: transparent; border: none;
+  font-family: inherit; font-size: 12px; font-weight: 600;
+  color: var(--navy-abyss); cursor: pointer;
 }
 .opt select:focus { outline: none; }
 
-/* ── RESULTS ───────────────────────────────────────────────── */
 .results { display: grid; gap: 8px; }
 .result {
-  display: grid;
-  grid-template-columns: 100px 1fr auto;
+  display: grid; grid-template-columns: 100px 1fr auto;
   gap: 14px; align-items: center;
   padding: 10px;
   background: var(--cream);
   border: 1px solid var(--paper-deep);
   border-radius: 8px;
-  transition: border-color 0.15s ease, transform 0.15s ease;
 }
-.result:hover {
-  border-color: var(--navy-soft);
-  background: var(--white);
-}
+.result:hover { border-color: var(--navy-soft); background: var(--white); }
 .result-thumb {
   width: 100px; height: 60px;
   background: var(--navy-deep);
-  border-radius: 6px;
-  overflow: hidden;
-  position: relative;
+  border-radius: 6px; overflow: hidden; position: relative;
 }
-.result-thumb img {
-  width: 100%; height: 100%; object-fit: cover; display: block;
-}
+.result-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .result-duration {
   position: absolute; bottom: 3px; right: 3px;
   background: rgba(5,13,31,0.92); color: var(--cream);
@@ -942,99 +760,65 @@ body { padding: 24px 16px 60px; }
 .result-body { min-width: 0; }
 .result-title {
   font-size: 14px; font-weight: 600;
-  color: var(--navy-abyss);
-  line-height: 1.3;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  color: var(--navy-abyss); line-height: 1.3;
+  display: -webkit-box; -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical; overflow: hidden;
   margin-bottom: 4px;
 }
 .result-meta {
   font-size: 12px; color: var(--navy-soft);
-  display: flex; gap: 8px; flex-wrap: wrap;
-  align-items: center;
+  display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
 }
 .uploader-link {
-  color: var(--navy);
-  font-weight: 600;
-  cursor: pointer;
-  text-decoration: underline;
-  text-decoration-color: transparent;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 2px;
-  transition: text-decoration-color 0.15s ease;
+  color: var(--navy); font-weight: 600; cursor: pointer;
+  text-decoration: underline; text-decoration-color: transparent;
 }
 .uploader-link:hover { text-decoration-color: var(--navy); }
+.result-actions { display: flex; flex-direction: column; gap: 4px; }
 
-.result-actions {
-  display: flex; flex-direction: column; gap: 4px;
-}
-
-/* ── BUTTONS ───────────────────────────────────────────────── */
 .btn {
   padding: 9px 14px;
   font-family: inherit; font-size: 12px; font-weight: 700;
   border: none; border-radius: 6px; cursor: pointer;
   display: inline-flex; align-items: center; gap: 6px;
-  transition: background 0.15s ease, transform 0.15s ease;
   white-space: nowrap;
 }
 .btn-primary { background: var(--navy-abyss); color: var(--cream); }
 .btn-primary:hover { background: var(--navy); }
-.btn-primary:disabled {
-  background: var(--paper-deep); color: var(--navy-soft);
-  cursor: not-allowed;
-}
+.btn-primary:disabled { background: var(--paper-deep); color: var(--navy-soft); cursor: not-allowed; }
 .btn-gold { background: var(--gold); color: var(--navy-abyss); }
 .btn-gold:hover { background: var(--gold-bright); }
 .btn-success { background: var(--success); color: var(--white); }
 .btn-success:hover { background: #246b4a; }
-.btn-ghost {
-  background: var(--white);
-  color: var(--navy);
-  border: 1px solid var(--paper-deep);
-}
+.btn-ghost { background: var(--white); color: var(--navy); border: 1px solid var(--paper-deep); }
 .btn-ghost:hover { background: var(--paper); }
 .btn-danger { background: var(--danger); color: var(--white); }
 .btn-danger:hover { background: #a83838; }
 .btn-mini { padding: 6px 10px; font-size: 11px; }
 
-/* ── EMPTY ─────────────────────────────────────────────────── */
-.empty {
-  padding: 40px 20px; text-align: center;
-  color: var(--navy-soft);
-  font-size: 13px;
-}
+.empty { padding: 40px 20px; text-align: center; color: var(--navy-soft); font-size: 13px; }
 .empty-big { font-size: 32px; margin-bottom: 10px; opacity: 0.5; }
 
-/* ── DOWNLOAD TRACKER (bottom-right, sticky) ──────────────── */
 .dl-tracker {
-  position: fixed;
-  bottom: 16px; right: 16px;
+  position: fixed; bottom: 16px; right: 16px;
   width: 340px; max-width: calc(100vw - 32px);
-  z-index: 100;
-  display: flex; flex-direction: column;
-  gap: 6px;
-  pointer-events: none;
+  z-index: 100; display: flex; flex-direction: column;
+  gap: 6px; pointer-events: none;
 }
 .dl-item {
   background: var(--white);
   border: 1px solid var(--paper-deep);
-  border-radius: 8px;
-  padding: 10px 12px;
+  border-radius: 8px; padding: 10px 12px;
   box-shadow: 0 8px 24px rgba(15,30,61,0.12);
-  pointer-events: auto;
-  position: relative;
+  pointer-events: auto; position: relative;
 }
-.dl-item.done { border-color: var(--success); background: linear-gradient(to right, rgba(45,138,95,0.05), var(--white)); }
+.dl-item.done { border-color: var(--success); }
 .dl-item.error { border-color: var(--danger); }
 .dl-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
 .dl-thumb {
   width: 36px; height: 36px;
   background: var(--navy-deep);
-  border-radius: 4px; overflow: hidden;
-  flex-shrink: 0;
+  border-radius: 4px; overflow: hidden; flex-shrink: 0;
 }
 .dl-thumb img { width: 100%; height: 100%; object-fit: cover; }
 .dl-info { flex: 1; min-width: 0; }
@@ -1043,13 +827,8 @@ body { padding: 24px 16px 60px; }
   color: var(--navy-abyss);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.dl-status {
-  font-size: 11px; color: var(--navy-soft); margin-top: 1px;
-}
-.dl-prog {
-  height: 3px; background: var(--paper); border-radius: 2px;
-  overflow: hidden;
-}
+.dl-status { font-size: 11px; color: var(--navy-soft); margin-top: 1px; }
+.dl-prog { height: 3px; background: var(--paper); border-radius: 2px; overflow: hidden; }
 .dl-prog-fill {
   height: 100%;
   background: linear-gradient(90deg, var(--navy), var(--gold));
@@ -1060,33 +839,20 @@ body { padding: 24px 16px 60px; }
   width: 18px; height: 18px;
   background: transparent; border: none; cursor: pointer;
   color: var(--navy-soft); font-size: 14px;
-  display: flex; align-items: center; justify-content: center;
-  border-radius: 3px;
 }
-.dl-close:hover { background: var(--paper); color: var(--danger); }
+.dl-actions { display: flex; gap: 4px; margin-top: 6px; }
 
-.dl-actions {
-  display: flex; gap: 4px; margin-top: 6px;
-}
-
-/* ── GROUP STATUS (playlist progress) ─────────────────────── */
 .group-status {
-  margin-top: 16px;
-  padding: 16px;
-  background: var(--cream);
-  border: 1px solid var(--paper-deep);
-  border-radius: 8px;
-  display: none;
+  margin-top: 16px; padding: 16px;
+  background: var(--cream); border: 1px solid var(--paper-deep);
+  border-radius: 8px; display: none;
 }
 .group-status.show { display: block; }
 .group-header {
   display: flex; justify-content: space-between; align-items: center;
   margin-bottom: 12px; flex-wrap: wrap; gap: 10px;
 }
-.group-title {
-  font-size: 14px; font-weight: 700;
-  color: var(--navy-abyss);
-}
+.group-title { font-size: 14px; font-weight: 700; color: var(--navy-abyss); }
 .group-counts { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip {
   font-size: 11px; font-weight: 600;
@@ -1096,135 +862,81 @@ body { padding: 24px 16px 60px; }
 .chip.done { background: var(--success); color: var(--white); }
 .chip.active { background: var(--navy); color: var(--cream); }
 .chip.error { background: var(--danger); color: var(--white); }
-.group-bar {
-  height: 5px; background: var(--paper); border-radius: 3px;
-  overflow: hidden; margin-bottom: 12px;
-}
+.group-bar { height: 5px; background: var(--paper); border-radius: 3px; overflow: hidden; margin-bottom: 12px; }
 .group-bar-fill {
   height: 100%; width: 0%;
   background: linear-gradient(90deg, var(--navy), var(--gold));
   transition: width 0.4s ease;
 }
-.sub-jobs {
-  max-height: 260px; overflow-y: auto;
-  display: grid; gap: 4px;
-}
+.sub-jobs { max-height: 260px; overflow-y: auto; display: grid; gap: 4px; }
 .sub-job {
   display: grid; grid-template-columns: 14px 1fr 50px;
   align-items: center; gap: 8px;
   padding: 5px 8px;
   background: var(--white);
   border: 1px solid var(--paper);
-  border-radius: 4px;
-  font-size: 11px;
+  border-radius: 4px; font-size: 11px;
 }
 .sub-job.done { border-color: var(--success); }
 .sub-job.active { border-color: var(--navy); }
 .sub-job.error { border-color: var(--danger); }
-.sub-dot {
-  width: 7px; height: 7px; border-radius: 50%;
-  background: var(--paper-deep);
-}
-.sub-dot.queued { background: var(--paper-deep); }
-.sub-dot.starting, .sub-dot.downloading {
-  background: var(--navy);
-}
+.sub-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--paper-deep); }
+.sub-dot.starting, .sub-dot.downloading { background: var(--navy); }
 .sub-dot.done { background: var(--success); }
 .sub-dot.error { background: var(--danger); }
-.sub-name {
-  color: var(--navy-deep);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.sub-pct {
-  font-weight: 600; color: var(--navy); text-align: right;
-}
+.sub-name { color: var(--navy-deep); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sub-pct { font-weight: 600; color: var(--navy); text-align: right; }
 
-/* ── ARTIST MODAL ─────────────────────────────────────────── */
 .modal {
   position: fixed; inset: 0;
   background: rgba(5,13,31,0.5);
-  z-index: 200;
-  display: none;
+  z-index: 200; display: none;
   align-items: center; justify-content: center;
   padding: 20px;
 }
 .modal.show { display: flex; }
 .modal-content {
-  background: var(--white);
-  border-radius: 12px;
-  max-width: 700px; width: 100%;
-  max-height: 80vh;
-  display: flex; flex-direction: column;
-  overflow: hidden;
+  background: var(--white); border-radius: 12px;
+  max-width: 700px; width: 100%; max-height: 80vh;
+  display: flex; flex-direction: column; overflow: hidden;
 }
 .modal-header {
   padding: 18px 20px;
   border-bottom: 1px solid var(--paper-deep);
   display: flex; justify-content: space-between; align-items: center;
 }
-.modal-title {
-  font-size: 18px; font-weight: 700;
-  color: var(--navy-abyss);
-}
+.modal-title { font-size: 18px; font-weight: 700; color: var(--navy-abyss); }
 .modal-title strong { color: var(--gold); }
 .modal-close {
   width: 32px; height: 32px;
-  background: transparent; border: 1px solid var(--paper-deep);
-  border-radius: 6px;
-  font-size: 18px;
-  cursor: pointer;
-  color: var(--navy-soft);
+  background: transparent;
+  border: 1px solid var(--paper-deep);
+  border-radius: 6px; font-size: 18px;
+  cursor: pointer; color: var(--navy-soft);
 }
-.modal-close:hover { background: var(--paper); }
-.modal-body {
-  flex: 1; overflow-y: auto;
-  padding: 16px 20px;
-}
-.modal-body .empty-state {
-  padding: 60px 20px; text-align: center; color: var(--navy-soft);
-}
+.modal-body { flex: 1; overflow-y: auto; padding: 16px 20px; }
+.modal-body .empty-state { padding: 60px 20px; text-align: center; color: var(--navy-soft); }
 .song-pick {
   display: grid; grid-template-columns: 24px 80px 1fr 60px;
   gap: 10px; align-items: center;
-  padding: 8px;
-  border-radius: 6px;
+  padding: 8px; border-radius: 6px;
   border: 1px solid var(--paper);
   margin-bottom: 4px;
 }
 .song-pick:hover { background: var(--cream); }
-.song-pick input[type="checkbox"] {
-  width: 16px; height: 16px;
-  accent-color: var(--navy);
-  cursor: pointer;
-}
-.song-pick-thumb {
-  width: 80px; height: 48px;
-  background: var(--navy-deep);
-  border-radius: 4px; overflow: hidden;
-}
+.song-pick input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--navy); cursor: pointer; }
+.song-pick-thumb { width: 80px; height: 48px; background: var(--navy-deep); border-radius: 4px; overflow: hidden; }
 .song-pick-thumb img { width: 100%; height: 100%; object-fit: cover; }
-.song-pick-body { min-width: 0; }
-.song-pick-title {
-  font-size: 13px; font-weight: 600;
-  color: var(--navy-abyss);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.song-pick-meta {
-  font-size: 11px; color: var(--navy-soft);
-}
-.song-pick-dur {
-  font-size: 11px; color: var(--navy-soft); text-align: right;
-}
+.song-pick-title { font-size: 13px; font-weight: 600; color: var(--navy-abyss); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.song-pick-meta { font-size: 11px; color: var(--navy-soft); }
+.song-pick-dur { font-size: 11px; color: var(--navy-soft); text-align: right; }
 .modal-footer {
   padding: 14px 20px;
   border-top: 1px solid var(--paper-deep);
   display: flex; justify-content: space-between; align-items: center;
   gap: 10px; flex-wrap: wrap;
 }
-.modal-select-info {
-  font-size: 13px; color: var(--navy);
-  font-weight: 600;
-}
+.modal-select-info { font-size: 13px; color: var(--navy); font-weight: 600; }
 .modal-actions { display: flex; gap: 8px; }
 .modal-spin {
   width: 24px; height: 24px;
@@ -1236,7 +948,6 @@ body { padding: 24px 16px 60px; }
 }
 @keyframes spin2 { to { transform: rotate(360deg); } }
 
-/* ── INPUTS for Batch Tab ─────────────────────────────────── */
 .textarea {
   width: 100%; padding: 12px 14px;
   background: var(--cream);
@@ -1246,62 +957,36 @@ body { padding: 24px 16px 60px; }
   color: var(--navy-abyss);
   min-height: 160px; resize: vertical; line-height: 1.6;
 }
-.textarea:focus {
-  outline: none; border-color: var(--navy);
-  background: var(--white);
-}
+.textarea:focus { outline: none; border-color: var(--navy); background: var(--white); }
 .field-label {
   display: flex; justify-content: space-between; align-items: center;
   font-size: 12px; font-weight: 600;
-  color: var(--navy-soft);
-  margin-bottom: 6px;
+  color: var(--navy-soft); margin-bottom: 6px;
 }
 
-/* ── HISTORY ──────────────────────────────────────────────── */
 .hist-list { display: grid; gap: 6px; }
 .hist {
   display: grid; grid-template-columns: 70px 1fr auto auto;
   align-items: center; gap: 12px;
   padding: 8px 12px;
-  background: var(--cream);
-  border: 1px solid var(--paper-deep);
+  background: var(--cream); border: 1px solid var(--paper-deep);
   border-radius: 6px;
 }
-.hist-thumb {
-  width: 70px; height: 42px;
-  background: var(--navy-deep);
-  border-radius: 4px; overflow: hidden;
-}
+.hist-thumb { width: 70px; height: 42px; background: var(--navy-deep); border-radius: 4px; overflow: hidden; }
 .hist-thumb img { width: 100%; height: 100%; object-fit: cover; }
-.hist-name {
-  font-size: 13px; font-weight: 600;
-  color: var(--navy-abyss);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
+.hist-name { font-size: 13px; font-weight: 600; color: var(--navy-abyss); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hist-meta { font-size: 11px; color: var(--navy-soft); margin-top: 2px; }
 .hist-size { font-size: 11px; color: var(--navy); font-weight: 600; }
-.hist-del {
-  width: 28px; height: 28px; border-radius: 4px;
-  background: transparent; border: 1px solid var(--paper-deep);
-  color: var(--danger); cursor: pointer; font-size: 12px;
-}
+.hist-del { width: 28px; height: 28px; border-radius: 4px; background: transparent; border: 1px solid var(--paper-deep); color: var(--danger); cursor: pointer; }
 .hist-del:hover { background: var(--danger); color: var(--white); }
 
-.footer {
-  margin-top: 24px; padding-top: 16px;
-  border-top: 1px solid var(--paper-deep);
-  text-align: center;
-  font-size: 11px; color: var(--navy-soft);
-}
+.footer { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--paper-deep); text-align: center; font-size: 11px; color: var(--navy-soft); }
 
 @media (max-width: 700px) {
   body { padding: 16px 12px; }
   .panel { padding: 18px 14px; }
   .result { grid-template-columns: 80px 1fr; }
-  .result-actions {
-    grid-column: 1 / -1; flex-direction: row;
-    margin-top: 4px;
-  }
+  .result-actions { grid-column: 1 / -1; flex-direction: row; margin-top: 4px; }
   .dl-tracker { width: calc(100vw - 24px); right: 12px; bottom: 12px; }
   .song-pick { grid-template-columns: 24px 60px 1fr; }
   .song-pick-dur { display: none; }
@@ -1309,9 +994,7 @@ body { padding: 24px 16px 60px; }
 </style>
 </head>
 <body>
-
 <div class="wrap">
-
   <header class="header">
     <div class="brand">
       <div class="brand-icon">FX</div>
@@ -1324,99 +1007,63 @@ body { padding: 24px 16px 60px; }
   </header>
 
   <div class="tabs">
-    <button class="tab active" data-tab="search">Kerko & Shkarko</button>
+    <button class="tab active" data-tab="search">Kerko &amp; Shkarko</button>
     <button class="tab" data-tab="batch">Playlist / Batch</button>
     <button class="tab" data-tab="history">Historiku</button>
   </div>
 
-  <!-- SEARCH PANEL -->
   <section class="panel" id="panel-search">
     <div class="panel-title">Kerko nje kenge</div>
     <div class="panel-sub">Shkruaj artist ose titull. Kliko "Shkarko" per shkarkim direkt.</div>
-
     <div class="search-box">
       <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-        <circle cx="11" cy="11" r="8"/>
-        <path d="m21 21-4.35-4.35"/>
+        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
       </svg>
-      <input type="text" class="search-input" id="searchInput"
-             placeholder="Dua Lipa, Imagine Dragons, ose URL..." spellcheck="false" autofocus>
+      <input type="text" class="search-input" id="searchInput" placeholder="Dua Lipa, Imagine Dragons, ose URL..." spellcheck="false" autofocus>
       <div class="search-spin" id="searchSpin"></div>
     </div>
-
     <div class="opts">
-      <div class="opt">
-        <label>Format</label>
-        <select id="optMode">
-          <option value="audio">MP3</option>
-          <option value="video">MP4</option>
-        </select>
+      <div class="opt"><label>Format</label>
+        <select id="optMode"><option value="audio">MP3</option><option value="video">MP4</option></select>
       </div>
-      <div class="opt">
-        <label>Cilesia</label>
-        <select id="optQuality">
-          <option value="128">128 kbps</option>
-          <option value="192" selected>192 kbps</option>
-          <option value="320">320 kbps</option>
-        </select>
+      <div class="opt"><label>Cilesia</label>
+        <select id="optQuality"><option value="128">128 kbps</option><option value="192" selected>192 kbps</option><option value="320">320 kbps</option></select>
       </div>
-      <div class="opt" id="optVideoBox" style="display:none">
-        <label>Rezolucioni</label>
-        <select id="optVideo">
-          <option value="360p">360p</option>
-          <option value="720p" selected>720p</option>
-          <option value="1080p">1080p</option>
-        </select>
+      <div class="opt" id="optVideoBox" style="display:none"><label>Rezolucioni</label>
+        <select id="optVideo"><option value="360p">360p</option><option value="720p" selected>720p</option><option value="1080p">1080p</option></select>
       </div>
     </div>
-
     <div class="results" id="results">
       <div class="empty">
-        <div class="empty-big">🔍</div>
+        <div class="empty-big">&#128270;</div>
         <p>Shkruaj emrin e nje kenge per te filluar</p>
-        <p style="margin-top:8px; font-size:11px">Te gjithe artistet kane butonin "Bej Playlist" anash 🎵</p>
+        <p style="margin-top:8px; font-size:11px">Te gjithe artistet kane butonin "Bej Playlist" anash &#127925;</p>
       </div>
     </div>
   </section>
 
-  <!-- BATCH/PLAYLIST PANEL -->
   <section class="panel hidden" id="panel-batch">
     <div class="panel-title">Playlist ose Shume URL</div>
     <div class="panel-sub">Vendos nje URL playlist-i, ose shume URL kengesh (nje per rresht). Sistemi e dallon automatikisht.</div>
-
     <div>
       <div class="field-label">
         <span>URL</span>
         <span id="batchInfo" style="color:var(--navy)"></span>
       </div>
-      <textarea class="textarea" id="batchLinks" placeholder="https://youtube.com/playlist?list=...&#10;ose shume linke:&#10;https://youtube.com/watch?v=...&#10;https://youtu.be/..." spellcheck="false"></textarea>
+      <textarea class="textarea" id="batchLinks" placeholder="https://youtube.com/playlist?list=...&#10;ose shume linke:&#10;https://youtube.com/watch?v=..." spellcheck="false"></textarea>
     </div>
-
     <div class="opts" style="margin-top:12px">
-      <div class="opt">
-        <label>Format</label>
-        <select id="batchMode">
-          <option value="audio" selected>MP3</option>
-          <option value="video">MP4</option>
-        </select>
+      <div class="opt"><label>Format</label>
+        <select id="batchMode"><option value="audio" selected>MP3</option><option value="video">MP4</option></select>
       </div>
-      <div class="opt">
-        <label>Cilesia</label>
-        <select id="batchQuality">
-          <option value="128">128 kbps</option>
-          <option value="192" selected>192 kbps</option>
-          <option value="320">320 kbps</option>
-        </select>
+      <div class="opt"><label>Cilesia</label>
+        <select id="batchQuality"><option value="128">128 kbps</option><option value="192" selected>192 kbps</option><option value="320">320 kbps</option></select>
       </div>
     </div>
-
     <div style="display:flex; gap:8px; margin-top:14px">
-      <button class="btn btn-primary" id="batchBtn">
-        <span id="batchBtnText">Fillo shkarkimin</span>
-      </button>
+      <button class="btn btn-primary" id="batchBtn"><span id="batchBtnText">Fillo shkarkimin</span></button>
       <button class="btn btn-ghost" id="clearBatchBtn">Pastro</button>
     </div>
-
     <div class="group-status" id="groupStatus">
       <div class="group-header">
         <div class="group-title" id="groupTitle">Processing</div>
@@ -1425,54 +1072,40 @@ body { padding: 24px 16px 60px; }
       <div class="group-bar"><div class="group-bar-fill" id="groupBar"></div></div>
       <div class="sub-jobs" id="subJobs"></div>
     </div>
-
     <div id="groupDlBox" style="margin-top:12px; display:none">
-      <a class="btn btn-success" id="groupDlLink" href="#" download>
-        ⬇ Shkarko ZIP <span id="groupDlInfo"></span>
-      </a>
+      <a class="btn btn-success" id="groupDlLink" href="#" download>&darr; Shkarko ZIP <span id="groupDlInfo"></span></a>
     </div>
   </section>
 
-  <!-- HISTORY PANEL -->
   <section class="panel hidden" id="panel-history">
     <div class="panel-title">Historiku</div>
     <div class="panel-sub">Te gjitha shkarkimet e fundit</div>
     <div style="display:flex; gap:8px; margin-bottom:14px">
       <button class="btn btn-ghost btn-mini" onclick="loadHistory()">Rifresko</button>
-      <button class="btn btn-danger btn-mini" id="clearHistBtn">Pastro te gjithe</button>
+      <button class="btn btn-danger btn-mini" id="clearHistBtn">Pastro</button>
     </div>
-    <div class="hist-list" id="histList">
-      <div class="empty"><p>Ende bosh</p></div>
-    </div>
+    <div class="hist-list" id="histList"><div class="empty"><p>Ende bosh</p></div></div>
   </section>
 
-  <footer class="footer">
-    Vetem per perdorim vetjak · Respekto te drejtat e autorit
-  </footer>
-
+  <footer class="footer">Vetem per perdorim vetjak &middot; Respekto te drejtat e autorit</footer>
 </div>
 
-<!-- Download Tracker -->
 <div class="dl-tracker" id="dlTracker"></div>
 
-<!-- Artist Playlist Modal -->
 <div class="modal" id="artistModal">
   <div class="modal-content">
     <div class="modal-header">
       <div class="modal-title">Krijo Playlist nga <strong id="artistName">Artisti</strong></div>
-      <button class="modal-close" onclick="closeArtistModal()">✕</button>
+      <button class="modal-close" onclick="closeArtistModal()">&times;</button>
     </div>
     <div class="modal-body" id="artistBody">
-      <div class="empty-state">
-        <div class="modal-spin"></div>
-        <p style="margin-top:12px">Duke mbledhur kenget...</p>
-      </div>
+      <div class="empty-state"><div class="modal-spin"></div><p style="margin-top:12px">Duke mbledhur kenget...</p></div>
     </div>
     <div class="modal-footer">
       <div class="modal-select-info" id="selectInfo">0 kenge te zgjedhura</div>
       <div class="modal-actions">
-        <button class="btn btn-ghost btn-mini" onclick="toggleAllSongs()">Zgjidh/Hiq te gjitha</button>
-        <button class="btn btn-primary" id="downloadPlaylistBtn" onclick="downloadArtistPlaylist()">⬇ Shkarko Playlist</button>
+        <button class="btn btn-ghost btn-mini" onclick="toggleAllSongs()">Zgjidh/Hiq</button>
+        <button class="btn btn-primary" id="downloadPlaylistBtn" onclick="downloadArtistPlaylist()">&darr; Shkarko Playlist</button>
       </div>
     </div>
   </div>
@@ -1481,8 +1114,6 @@ body { padding: 24px 16px 60px; }
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s||'').replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
-
-// State
 const active = new Map();
 let lastResults = [];
 let artistSongs = [];
@@ -1496,7 +1127,6 @@ async function api(path, method='GET', body=null) {
   return data;
 }
 
-// ── TABS ───────────────────────────────────────────────────
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -1507,18 +1137,16 @@ document.querySelectorAll('.tab').forEach(tab => {
   });
 });
 
-// ── MODE TOGGLE ───────────────────────────────────────────
 $('optMode').addEventListener('change', () => {
   $('optVideoBox').style.display = $('optMode').value === 'video' ? '' : 'none';
 });
 
-// ── SEARCH ────────────────────────────────────────────────
 let _searchTimer = null;
 $('searchInput').addEventListener('input', e => {
   const q = e.target.value.trim();
   if (_searchTimer) clearTimeout(_searchTimer);
   if (!q) {
-    $('results').innerHTML = '<div class="empty"><div class="empty-big">🔍</div><p>Shkruaj emrin e nje kenge per te filluar</p><p style="margin-top:8px; font-size:11px">Te gjithe artistet kane butonin "Bej Playlist" anash 🎵</p></div>';
+    $('results').innerHTML = '<div class="empty"><div class="empty-big">&#128270;</div><p>Shkruaj emrin e nje kenge per te filluar</p></div>';
     $('searchSpin').classList.remove('show');
     return;
   }
@@ -1537,8 +1165,7 @@ async function doSearch(q) {
   try {
     const r = await api('/api/search', 'POST', { q });
     if (r.is_url) {
-      // URL direkt - shkarko menjehere
-      $('results').innerHTML = '<div class="empty"><p>URL e detektuar — shkarkimi po fillon...</p></div>';
+      $('results').innerHTML = '<div class="empty"><p>URL e detektuar - shkarkimi po fillon...</p></div>';
       startDownload({ url: r.url, title: 'Download', thumbnail: '' });
       $('searchInput').value = '';
       return;
@@ -1561,7 +1188,7 @@ function formatViews(n) {
 function renderResults(results) {
   lastResults = results;
   if (!results.length) {
-    $('results').innerHTML = '<div class="empty"><div class="empty-big">😕</div><p>Asnje rezultat</p></div>';
+    $('results').innerHTML = '<div class="empty"><div class="empty-big">&#128542;</div><p>Asnje rezultat</p></div>';
     return;
   }
   $('results').innerHTML = results.map((r, i) => {
@@ -1575,14 +1202,11 @@ function renderResults(results) {
       '</div>' +
       '<div class="result-body">' +
         '<div class="result-title">' + esc(r.title) + '</div>' +
-        '<div class="result-meta">' +
-          uploader +
-          (views ? '<span>· ' + views + '</span>' : '') +
-        '</div>' +
+        '<div class="result-meta">' + uploader + (views ? '<span>&middot; ' + views + '</span>' : '') + '</div>' +
       '</div>' +
       '<div class="result-actions">' +
-        '<button class="btn btn-primary btn-mini" onclick="downloadResult(' + i + ')">⬇ Shkarko</button>' +
-        (r.uploader ? '<button class="btn btn-gold btn-mini" onclick="openArtist(\'' + esc(r.uploader).replace(/'/g, "\\'") + '\')" title="Bej playlist nga ' + esc(r.uploader) + '">🎵 Playlist</button>' : '') +
+        '<button class="btn btn-primary btn-mini" onclick="downloadResult(' + i + ')">&darr; Shkarko</button>' +
+        (r.uploader ? '<button class="btn btn-gold btn-mini" onclick="openArtist(\'' + esc(r.uploader).replace(/'/g, "\\'") + '\')">&#127925; Playlist</button>' : '') +
       '</div>' +
     '</div>';
   }).join('');
@@ -1594,27 +1218,19 @@ window.downloadResult = function(idx) {
   startDownload({ url: r.url, title: r.title, thumbnail: r.thumbnail });
 };
 
-// ── START DOWNLOAD (instant) ───────────────────────────────
 async function startDownload(item) {
-  // Shfaq menjehere ne tracker me status "starting"
   const tempId = 'tmp-' + Date.now();
   active.set(tempId, {
     id: tempId, title: item.title, thumbnail: item.thumbnail,
     status: 'queued', progress: 0, message: 'Duke filluar...',
   });
   renderTracker();
-
   try {
     const r = await api('/api/start', 'POST', {
-      url: item.url,
-      title: item.title,
-      thumbnail: item.thumbnail,
-      mode: $('optMode').value,
-      audio_format: 'mp3',
-      quality: $('optQuality').value,
-      video_quality: $('optVideo').value,
+      url: item.url, title: item.title, thumbnail: item.thumbnail,
+      mode: $('optMode').value, audio_format: 'mp3',
+      quality: $('optQuality').value, video_quality: $('optVideo').value,
     });
-    // Lidh tempId me jid-in e vertete
     if (r.job_id) {
       const it = active.get(tempId);
       active.delete(tempId);
@@ -1635,20 +1251,16 @@ function renderTracker() {
   if (!items.length) { $('dlTracker').innerHTML = ''; return; }
   $('dlTracker').innerHTML = items.map(it => {
     const cls = it.status === 'done' ? 'done' : it.status === 'error' ? 'error' : '';
-    const dl = it.download_url ?
-      '<a class="btn btn-success btn-mini" href="' + esc(it.download_url) + '" download>⬇ Shkarko</a>' : '';
+    const dl = it.download_url ? '<a class="btn btn-success btn-mini" href="' + esc(it.download_url) + '" download>&darr; Shkarko</a>' : '';
     const cancel = !['done','error','cancelled'].includes(it.status) ?
       '<button class="btn btn-ghost btn-mini" onclick="cancelDl(\'' + it.id + '\')">Anulo</button>' : '';
     return '<div class="dl-item ' + cls + '">' +
-      '<button class="dl-close" onclick="closeTracker(\'' + it.id + '\')">✕</button>' +
+      '<button class="dl-close" onclick="closeTracker(\'' + it.id + '\')">&times;</button>' +
       '<div class="dl-row">' +
-        '<div class="dl-thumb">' +
-          (it.thumbnail ? '<img src="' + esc(it.thumbnail) + '" alt="">' : '') +
-        '</div>' +
+        '<div class="dl-thumb">' + (it.thumbnail ? '<img src="' + esc(it.thumbnail) + '" alt="">' : '') + '</div>' +
         '<div class="dl-info">' +
           '<div class="dl-title">' + esc(it.title) + '</div>' +
-          '<div class="dl-status">' + esc(it.message || it.status) +
-            (it.speed_human ? ' · ' + esc(it.speed_human) : '') + '</div>' +
+          '<div class="dl-status">' + esc(it.message || it.status) + (it.speed_human ? ' &middot; ' + esc(it.speed_human) : '') + '</div>' +
         '</div>' +
       '</div>' +
       '<div class="dl-prog"><div class="dl-prog-fill" style="width:' + (it.progress||0) + '%"></div></div>' +
@@ -1672,15 +1284,11 @@ async function watchJob(jid) {
       }
       if (['done','error','cancelled'].includes(j.status)) {
         clearInterval(interval);
-        // AUTO-DOWNLOAD: kur mbaron, shkarko file-in automatikisht
         if (j.status === 'done' && j.download_url) {
           setTimeout(() => {
             const a = document.createElement('a');
-            a.href = j.download_url;
-            a.download = j.filename || 'download';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
+            a.href = j.download_url; a.download = j.filename || 'download';
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
           }, 300);
         }
         loadHealth();
@@ -1689,15 +1297,11 @@ async function watchJob(jid) {
   }, 700);
 }
 
-// ── ARTIST PLAYLIST ───────────────────────────────────────
 window.openArtist = async function(artist) {
   $('artistModal').classList.add('show');
   $('artistName').textContent = artist;
-  $('artistBody').innerHTML =
-    '<div class="empty-state"><div class="modal-spin"></div>' +
-    '<p style="margin-top:12px">Duke mbledhur kenget e ' + esc(artist) + '...</p></div>';
+  $('artistBody').innerHTML = '<div class="empty-state"><div class="modal-spin"></div><p style="margin-top:12px">Duke mbledhur kenget e ' + esc(artist) + '...</p></div>';
   $('selectInfo').textContent = '0 kenge te zgjedhura';
-
   try {
     const r = await api('/api/artist', 'POST', { artist, limit: 50 });
     artistSongs = r.songs || [];
@@ -1715,13 +1319,8 @@ function renderArtistSongs() {
   $('artistBody').innerHTML = artistSongs.map((s, i) =>
     '<label class="song-pick">' +
       '<input type="checkbox" checked data-idx="' + i + '" onchange="updateSelectCount()">' +
-      '<div class="song-pick-thumb">' +
-        (s.thumbnail ? '<img src="' + esc(s.thumbnail) + '" alt="" loading="lazy">' : '') +
-      '</div>' +
-      '<div class="song-pick-body">' +
-        '<div class="song-pick-title">' + esc(s.title) + '</div>' +
-        '<div class="song-pick-meta">' + esc(s.uploader || '') + '</div>' +
-      '</div>' +
+      '<div class="song-pick-thumb">' + (s.thumbnail ? '<img src="' + esc(s.thumbnail) + '" alt="" loading="lazy">' : '') + '</div>' +
+      '<div><div class="song-pick-title">' + esc(s.title) + '</div><div class="song-pick-meta">' + esc(s.uploader || '') + '</div></div>' +
       '<div class="song-pick-dur">' + esc(s.duration || '') + '</div>' +
     '</label>'
   ).join('');
@@ -1740,46 +1339,32 @@ window.toggleAllSongs = function() {
   updateSelectCount();
 };
 
-window.closeArtistModal = function() {
-  $('artistModal').classList.remove('show');
-};
+window.closeArtistModal = function() { $('artistModal').classList.remove('show'); };
 
 window.downloadArtistPlaylist = async function() {
   const checked = Array.from(document.querySelectorAll('#artistBody input[type="checkbox"]:checked'));
   if (!checked.length) { alert('Zgjidh te pakten 1 keng.'); return; }
   const selected = checked.map(b => artistSongs[+b.dataset.idx]).filter(Boolean);
   const artist = $('artistName').textContent;
-
   try {
     $('downloadPlaylistBtn').disabled = true;
     const r = await api('/api/start-bulk', 'POST', {
-      songs: selected,
-      title: artist + ' - Playlist',
-      mode: $('optMode').value,
-      audio_format: 'mp3',
-      quality: $('optQuality').value,
+      songs: selected, title: artist + ' - Playlist',
+      mode: $('optMode').value, audio_format: 'mp3', quality: $('optQuality').value,
     });
     closeArtistModal();
-    // Shko te tab Batch dhe shfaq progresin
     document.querySelector('[data-tab="batch"]').click();
     watchGroup(r.group_id, r.count);
-  } catch (e) {
-    alert(e.message);
-  } finally {
-    $('downloadPlaylistBtn').disabled = false;
-  }
+  } catch (e) { alert(e.message); }
+  finally { $('downloadPlaylistBtn').disabled = false; }
 };
 
-// ── BATCH PANEL ──────────────────────────────────────────
 function isPlaylistUrl(url) {
   return /[?&]list=[A-Za-z0-9_-]+/.test(url) || /\/playlist\?/.test(url);
 }
 
 function parseBatchUrls() {
-  return $('batchLinks').value
-    .split('\n')
-    .map(l => l.trim())
-    .filter(l => l && l.startsWith('http'));
+  return $('batchLinks').value.split('\n').map(l => l.trim()).filter(l => l && l.startsWith('http'));
 }
 
 function detectBatchMode() {
@@ -1795,13 +1380,12 @@ function updateBatchInfo() {
   const mode = detectBatchMode();
   const info = $('batchInfo');
   const btnText = $('batchBtnText');
-
   if (mode === 'playlist') {
-    info.textContent = '🎵 PLAYLIST e detektuar';
+    info.textContent = '\u{1F3B5} PLAYLIST e detektuar';
     info.style.color = 'var(--gold)';
     btnText.textContent = 'Shkarko Playlist';
   } else if (mode === 'batch') {
-    info.textContent = urls.length + ' URL · ' + (urls.length > 250 ? 'shumica!' : 'batch');
+    info.textContent = urls.length + ' URL';
     info.style.color = urls.length > 250 ? 'var(--danger)' : 'var(--navy)';
     btnText.textContent = 'Shkarko ' + urls.length + ' file';
   } else if (mode === 'single') {
@@ -1825,26 +1409,20 @@ $('batchBtn').onclick = async () => {
   if (!urls.length) return;
   if (urls.length > 250) { alert('Maks 250 URL.'); return; }
   const mode = detectBatchMode();
-
   $('batchBtn').disabled = true;
   $('groupDlBox').style.display = 'none';
-
   try {
     if (mode === 'playlist') {
       $('groupStatus').classList.add('show');
       $('groupTitle').textContent = 'Analize playlist-i...';
       $('groupCounts').innerHTML = '<span class="chip">Duke lexuar...</span>';
       const r = await api('/api/start-playlist', 'POST', {
-        url: urls[0],
-        mode: $('batchMode').value,
-        quality: $('batchQuality').value,
+        url: urls[0], mode: $('batchMode').value, quality: $('batchQuality').value,
       });
       watchGroup(r.group_id, r.count);
     } else if (mode === 'single') {
       const r = await api('/api/start', 'POST', {
-        url: urls[0],
-        mode: $('batchMode').value,
-        quality: $('batchQuality').value,
+        url: urls[0], mode: $('batchMode').value, quality: $('batchQuality').value,
       });
       $('batchLinks').value = '';
       updateBatchInfo();
@@ -1857,8 +1435,7 @@ $('batchBtn').onclick = async () => {
       const r = await api('/api/start-bulk', 'POST', {
         songs: urls.map(u => ({ url: u, title: 'Track', thumbnail: '' })),
         title: 'Batch ' + new Date().toISOString().slice(0, 10),
-        mode: $('batchMode').value,
-        quality: $('batchQuality').value,
+        mode: $('batchMode').value, quality: $('batchQuality').value,
       });
       watchGroup(r.group_id, r.count);
     }
@@ -1872,8 +1449,7 @@ $('batchBtn').onclick = async () => {
 function addToTracker(jid, item) {
   active.set(jid, {
     id: jid, title: item.title || 'Download',
-    thumbnail: item.thumbnail || '',
-    status: 'queued', progress: 0,
+    thumbnail: item.thumbnail || '', status: 'queued', progress: 0,
   });
   renderTracker();
 }
@@ -1904,15 +1480,12 @@ function watchGroup(gid, expected) {
         clearInterval(interval);
         $('batchBtn').disabled = false;
         $('groupDlLink').href = g.download_url;
-        $('groupDlInfo').textContent = '(' + g.done + ' file · ' + (g.size_human||'') + ')';
+        $('groupDlInfo').textContent = '(' + g.done + ' file &middot; ' + (g.size_human||'') + ')';
         $('groupDlBox').style.display = 'block';
-        // Auto-trigger ZIP download
         setTimeout(() => {
           const a = document.createElement('a');
           a.href = g.download_url;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
+          document.body.appendChild(a); a.click(); document.body.removeChild(a);
         }, 500);
         loadHistory();
       }
@@ -1920,7 +1493,6 @@ function watchGroup(gid, expected) {
   }, 1000);
 }
 
-// ── HISTORY ────────────────────────────────────────────────
 async function loadHistory() {
   try {
     const hist = await api('/api/history');
@@ -1930,15 +1502,10 @@ async function loadHistory() {
     }
     $('histList').innerHTML = hist.slice(0, 100).map(x =>
       '<div class="hist">' +
-        '<div class="hist-thumb">' +
-          (x.thumbnail ? '<img src="' + esc(x.thumbnail) + '" alt="" loading="lazy">' : '') +
-        '</div>' +
-        '<div>' +
-          '<div class="hist-name">' + esc(x.title || 'Download') + '</div>' +
-          '<div class="hist-meta">' + esc(x.time || '') + ' · ' + esc(x.format || '') + '</div>' +
-        '</div>' +
+        '<div class="hist-thumb">' + (x.thumbnail ? '<img src="' + esc(x.thumbnail) + '" alt="" loading="lazy">' : '') + '</div>' +
+        '<div><div class="hist-name">' + esc(x.title || 'Download') + '</div><div class="hist-meta">' + esc(x.time || '') + ' &middot; ' + esc(x.format || '') + '</div></div>' +
         '<div class="hist-size">' + esc(x.size_human || '') + '</div>' +
-        '<button class="hist-del" onclick="deleteHist(\'' + x.id + '\')">✕</button>' +
+        '<button class="hist-del" onclick="deleteHist(\'' + x.id + '\')">&times;</button>' +
       '</div>'
     ).join('');
   } catch (e) {}
@@ -1953,7 +1520,6 @@ $('clearHistBtn').onclick = async () => {
   try { await api('/api/history/clear', 'POST', {}); loadHistory(); } catch (e) {}
 };
 
-// ── HEALTH ─────────────────────────────────────────────────
 async function loadHealth() {
   try {
     const h = await api('/api/health');
@@ -1961,7 +1527,6 @@ async function loadHealth() {
   } catch (e) {}
 }
 
-// Close modal on background click
 $('artistModal').addEventListener('click', e => {
   if (e.target === $('artistModal')) closeArtistModal();
 });
@@ -1974,15 +1539,12 @@ updateBatchInfo();
 </html>"""
 
 
-# ── ENTRY POINT ──────────────────────────────────────────────────────────────
-
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    host = "0.0.0.0"
     print("=" * 60)
     print("  FIXOTOOLS - LITE Edition")
     print(f"  Paralel: {PARALLEL_JOBS}x  |  Max batch: {MAX_BATCH}")
-    print(f"  FFmpeg: {ffmpeg_path() or 'NUK U GJET'}")
-    print(f"  -> http://{host}:{port}")
+    print(f"  -> http://127.0.0.1:5000")
     print("=" * 60)
-    app.run(debug=False, host=host, port=port, threaded=True)
+    if not ffmpeg_ok():
+        print("  WARNING: FFmpeg jo i instaluar!")
+    app.run(debug=False, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), threaded=True)
