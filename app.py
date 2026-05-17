@@ -242,11 +242,22 @@ def _build_opts(jid: str, payload: Dict, folder: Path) -> Dict[str, Any]:
         "outtmpl": tmpl, "quiet": True, "no_warnings": True,
         "ignoreerrors": True, "noplaylist": True,
         "windowsfilenames": True, "continuedl": True,
-        "retries": 2, "fragment_retries": 2,
+        "retries": 3, "fragment_retries": 3,
         "concurrent_fragment_downloads": 16,
         "http_chunk_size": 10485760,
         "progress_hooks": [_progress_hook(jid)],
         "no_color": True,
+        # Anti-bot: pretendo qe je Firefox real
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+        "extractor_args": {
+            "youtube": {
+                # Perdor klientet "android" dhe "ios" qe shpesh e kalojne bllokimin
+                "player_client": ["android", "ios", "web"],
+                "player_skip": ["webpage"],
+            }
+        },
+        "geo_bypass": True,
+        "geo_bypass_country": "US",
     }
     if mode == "audio":
         fmt = payload.get("audio_format", "mp3")
@@ -311,9 +322,20 @@ def run_download(jid: str) -> None:
         if jid in CANCELLED:
             _job_update(jid, status="cancelled", progress=0, message="U anulua.")
         else:
-            _job_update(jid, status="error", progress=0,
-                       message=f"Gabim: {str(exc)[:80]}")
-            print(f"Job {jid} error: {exc}")
+            err_msg = str(exc)
+            # Detekto gabime te zakonshme te YouTube
+            if "Sign in to confirm" in err_msg or "bot" in err_msg.lower():
+                user_msg = "YouTube e bllokoi (cloud IP). Provo lokalisht."
+            elif "Video unavailable" in err_msg:
+                user_msg = "Video e padisponueshme ose private."
+            elif "HTTP Error 403" in err_msg:
+                user_msg = "Akses i ndaluar (403). YouTube po bllokon."
+            elif "File nuk u gjet" in err_msg or "File jo i gjetur" in err_msg:
+                user_msg = "Shkarkimi deshtoi pa file. Kontrollo logs."
+            else:
+                user_msg = f"Gabim: {err_msg[:120]}"
+            _job_update(jid, status="error", progress=0, message=user_msg)
+            print(f"Job {jid} ERROR: {err_msg}")
             gid = job.get("group_id")
             if gid: _check_group_complete(gid)
 
